@@ -15,7 +15,7 @@ import ij.gui.Roi;
 import inra.ijpb.morphology.Morphology;
 import inra.ijpb.morphology.Strel;
 
-@Plugin(type = Command.class, menuPath = "Plugins>BII 2023>Homework Tracking")
+@Plugin(type = Command.class, menuPath = "Plugins>BII 2023>Spindle Analysis")
 public class Spindle_Analysis_Plugin implements Command {
 
     public void run() {
