@@ -11,6 +11,11 @@ import ij.measure.*;
 import ij.plugin.frame.*;
 import ij.gui.Plot;
 import ij.gui.Roi;
+import ij.plugin.filter.ParticleAnalyzer;
+import ij.measure.ResultsTable;
+import ij.measure.Measurements;
+
+
 
 import inra.ijpb.morphology.Morphology;
 import inra.ijpb.morphology.Strel;
@@ -28,108 +33,66 @@ public class Spindle_Analysis_Plugin implements Command {
         int Fluorescence_channel = 1;
         int DIC_channel = 2;
 
-        double[] measurements = new double[frames];
-
-        for (int t = 1; t <= frames; t++) {
-            imp.setPosition(DIC_channel, 1, t);
-            ImagePlus DIC_stack = new Duplicator().run(imp);
-            DIC_stack.setTitle("DIC_stack_" + t);
-
-            IJ.run(DIC_stack, "32-bit", ""); 
-            IJ.run(DIC_stack, "Variance...", "radius=5");
-
-            Strel se = Strel.Shape.DISK.fromRadius(5);
-            ImageProcessor ip = DIC_stack.getProcessor();
-            for (int i = 0; i < 5; i++) {
-                ip = Morphology.closing(ip, se);
-            }
-            DIC_stack.setProcessor(ip);
-            
-            //IJ.run(DIC_stack, "Invert", "stack");
-            IJ.setAutoThreshold(DIC_stack, "Huang dark");
-            IJ.run(DIC_stack, "Convert to Mask", "method=Huang background=Dark black");
-            //IJ.setAutoThreshold(DIC_stack, "Default dark");
-            //IJ.run(DIC_stack, "Convert to Mask", "stack");
-            IJ.run(DIC_stack, "Analyze Particles...", "size=20-Infinity circularity=0.50-1.00 show=Nothing clear add");           
-            
-            // show the final DIC_stack with segmentation outlines
-            ImagePlus originalStack = new Duplicator().run(imp);
-            originalStack.setTitle("Original_stack_" + t);
-            ImageCalculator ic = new ImageCalculator();
-            ImagePlus outlinedStack = ic.run("Subtract create stack", originalStack, DIC_stack);
-            outlinedStack.show();
-            
-            imp.setPosition(Fluorescence_channel, 1, t);
-            ImagePlus Fluorescence_stack = new Duplicator().run(imp);
-            Fluorescence_stack.setTitle("Fluorescence_stack_" + t);
-            // Subtract Background
-            IJ.run(Fluorescence_stack, "Subtract Background...", "rolling=50");
-
-            RoiManager roiManager = RoiManager.getInstance();
-            if (roiManager == null) roiManager = new RoiManager();
-            //roiManager.select(0);
-            
-            // get the ROIs for this frame
-            Roi[] rois = roiManager.getRoisAsArray();
-            
-            // if there are ROIs for this frame
-            if(rois != null && rois.length > 0) {
-                // Set the ROI to the Fluorescence_stack
-                Fluorescence_stack.setRoi(rois[rois.length - 1]);
-
-                IJ.run(Fluorescence_stack, "Measure", "");
-                ResultsTable rt = ResultsTable.getResultsTable();
-                //double fluorescenceIntensity = rt.getValue("Mean", rt.getCounter() - 1);
-                double mean = rt.getValue("Mean", rt.getCounter() - 1);
-                double sum = rt.getValue("Sum", rt.getCounter() - 1);
-                double stddev = rt.getValue("StdDev", rt.getCounter() - 1);
-                double area = rt.getValue("Area", rt.getCounter() - 1);
-                double skewness = rt.getValue("Skewness", rt.getCounter() - 1);
-                double kurtosis = rt.getValue("Kurtosis", rt.getCounter() - 1);
-
-                // compute index of condensation
-                double index = (mean + sum + stddev + area + skewness + kurtosis) / 6;
-
-                measurements[t - 1] = index;
-            }
-
-
-            
-           
-            //DIC_stack.changes = false;
-            //DIC_stack.close();
-            //Fluorescence_stack.changes = false;
-            //Fluorescence_stack.close();
-
-            roiManager.reset();
-        }
-
-        ResultsTable measurementsTable = new ResultsTable();
-        for (int i = 0; i < measurements.length; i++) {
-            measurementsTable.incrementCounter();
-            measurementsTable.addValue("Index", measurements[i]);
-        }
-
-        measurementsTable.show("Chromatine Condensation Index Results");
+        // Split channels
+        ImagePlus[] channels = ChannelSplitter.split(imp);
         
-        // After filling up the measurements array
-        double[] frameNumbers = new double[frames];
-        for (int i = 0; i < frames; i++) {
-            frameNumbers[i] = i + 1;
-        }
-        float[] measurementsFloat = new float[measurements.length];
-        for (int i = 0; i < measurements.length; i++) {
-            measurementsFloat[i] = (float) measurements[i];
+        // Processing for DIC Channel
+        ImagePlus DIC = channels[DIC_channel-1];
+        IJ.run(DIC, "32-bit", "");
+        IJ.run(DIC, "Variance...", "radius=3 stack");
+        IJ.run(DIC, "Enhance Contrast", "saturated=0.35");
+        IJ.run(DIC, "Enhance Contrast", "saturated=0.35");
+        //IJ.run(DIC, "Close", "");
+        IJ.run(DIC, "8-bit", "");
+        IJ.run(DIC, "Gray Morphology", "radius=13 type=circle operator=close");
+        IJ.setAutoThreshold(DIC, "Default dark no-reset");
+        IJ.setAutoThreshold(DIC, "Li dark no-reset");
+        IJ.run(DIC, "Convert to Mask", "method=Li background=Light calculate black");
+        
+        //IJ.run(DIC, "Mean...", "radius=3 stack");
+        //IJ.run(DIC, "Subtract Background...", "rolling=40 stack");
+        //IJ.setAutoThreshold(DIC, "Li dark stack");
+        DIC.show();
+
+        // Processing for Fluorescence Channel
+        ImagePlus Fluorescence = channels[Fluorescence_channel-1];
+        IJ.run(Fluorescence, "Subtract Background...", "rolling=50 stack");
+
+        // Analyse particles
+        IJ.run(DIC, "Analyze Particles...", "size=20-Infinity circularity=0.5-1.00 show=[Overlay Outlines] display exclude stack");
+
+        // Get the results
+        ResultsTable rt = new ResultsTable();
+        int options = ParticleAnalyzer.ADD_TO_MANAGER;
+        int measurements = Measurements.ALL_STATS;
+        RoiManager roiManager = new RoiManager(true);
+        ParticleAnalyzer analyzer = new ParticleAnalyzer(options, measurements, rt, 20, Double.POSITIVE_INFINITY, 0.5, 1.0);
+        analyzer.analyze(DIC);
+
+        // Create an array to store condensation index
+        double[] condensationIndex = new double[roiManager.getCount()];
+
+        // Apply each ROI from the RoiManager to the Fluorescence image and measure the intensity
+        for (int i = 0; i < roiManager.getCount(); i++) {
+            // Set the ROI to the Fluorescence channel
+            Roi roi = roiManager.getRoi(i);
+            Fluorescence.setRoi(roi);
+
+            // Calculate condensation index based on skewness
+            ImageStatistics stats = Fluorescence.getStatistics(Measurements.SKEWNESS);
+            condensationIndex[i] = stats.skewness; 
         }
 
-        float[] framesFloat = new float[frames];
+
+        // Create an array to represent frames
+        double[] framesArray = new double[frames];
         for (int i = 0; i < frames; i++) {
-            framesFloat[i] = (float) (i + 1);
+            framesArray[i] = i;
         }
 
-        Plot plot = new Plot("Chromatine Condensation Index", "Frame", "Value");
-        plot.addPoints(framesFloat, measurementsFloat, Plot.LINE);
-        plot.addPoints(framesFloat, measurementsFloat, Plot.CIRCLE);
+        // Create a new plot
+        Plot plot = new Plot("Condensation Index", "Frame", "Index");
+        plot.add("line", framesArray, condensationIndex);
         plot.show();
 
     }
