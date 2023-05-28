@@ -59,30 +59,37 @@ public class Spindle_Analysis_Plugin implements Command {
         IJ.run(Fluorescence, "Subtract Background...", "rolling=50 stack");
 
         // Analyse particles
-        IJ.run(DIC, "Analyze Particles...", "size=20-Infinity circularity=0.5-1.00 show=[Overlay Outlines] display exclude stack");
+        //IJ.run(DIC, "Analyze Particles...", "size=20-Infinity circularity=0.5-1.00 show=[Overlay Outlines] display exclude stack");
 
         // Get the results
-        ResultsTable rt = new ResultsTable();
+        ResultsTable rt = new ResultsTable();        
         int options = ParticleAnalyzer.ADD_TO_MANAGER;
         int measurements = Measurements.ALL_STATS;
         RoiManager roiManager = new RoiManager(true);
-        ParticleAnalyzer analyzer = new ParticleAnalyzer(options, measurements, rt, 20, Double.POSITIVE_INFINITY, 0.5, 1.0);
-        analyzer.analyze(DIC);
-
+        
         // Create an array to store condensation index
         double[] condensationIndex = new double[roiManager.getCount()];
 
-        // Apply each ROI from the RoiManager to the Fluorescence image and measure the intensity
-        for (int i = 0; i < roiManager.getCount(); i++) {
-            // Set the ROI to the Fluorescence channel
-            Roi roi = roiManager.getRoi(i);
-            Fluorescence.setRoi(roi);
+        for (int slice = 1; slice <= DIC.getNSlices(); slice++) {
+            DIC.setSlice(slice);
+            //ResultsTable rt = new ResultsTable();
+            ParticleAnalyzer analyzer = new ParticleAnalyzer(options, measurements, rt, 20, Double.POSITIVE_INFINITY, 0.5, 1.0);
+            analyzer.analyze(DIC);
+            for (int i = 0; i < roiManager.getCount(); i++) {
+                // Set the current slice
+                Fluorescence.setSlice(slice);
 
-            // Calculate condensation index based on skewness
-            ImageStatistics stats = Fluorescence.getStatistics(Measurements.SKEWNESS);
-            condensationIndex[i] = stats.skewness; 
+                // Set the ROI to the Fluorescence channel
+                Roi roi = roiManager.getRoi(i);
+                Fluorescence.setRoi(roi);
+
+                // Calculate condensation index based on Skewness
+                ImageStatistics stats = Fluorescence.getStatistics(Measurements.SKEWNESS);
+                condensationIndex[slice - 1] = stats.skewness;
+            }
         }
-
+            
+           
 
         // Create an array to represent frames
         double[] framesArray = new double[frames];
