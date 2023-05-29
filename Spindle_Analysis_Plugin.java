@@ -1,5 +1,6 @@
 package ch.epfl.bii.ij2command;
 
+
 import org.scijava.command.Command;
 import org.scijava.plugin.Plugin;
 
@@ -12,6 +13,7 @@ import ij.plugin.frame.*;
 import ij.gui.Plot;
 import ij.gui.Roi;
 import ij.plugin.filter.ParticleAnalyzer;
+import ij.plugin.filter.RankFilters;
 import ij.measure.ResultsTable;
 import ij.measure.Measurements;
 
@@ -19,6 +21,8 @@ import ij.measure.Measurements;
 
 import inra.ijpb.morphology.Morphology;
 import inra.ijpb.morphology.Strel;
+import net.imagej.ops.Ops.Filter;
+import net.imagej.ops.Ops.Filter.Variance;
 
 @Plugin(type = Command.class, menuPath = "Plugins>BII 2023>Spindle Analysis")
 public class Spindle_Analysis_Plugin implements Command {
@@ -38,15 +42,20 @@ public class Spindle_Analysis_Plugin implements Command {
         
         // Processing for DIC Channel
         ImagePlus DIC = channels[DIC_channel-1];
+        //normalizeStack(DIC);
         IJ.run(DIC, "32-bit", "");
-        IJ.run(DIC, "Variance...", "radius=3 stack");
+        IJ.run(DIC, "Variance...", "radius=3 stack"); // changed from 3
         IJ.run(DIC, "Enhance Contrast", "saturated=0.35");
         IJ.run(DIC, "Enhance Contrast", "saturated=0.35");
         //IJ.run(DIC, "Close", "");
         IJ.run(DIC, "8-bit", "");
         IJ.run(DIC, "Gray Morphology", "radius=13 type=circle operator=close");
-        IJ.setAutoThreshold(DIC, "Default dark no-reset");
-        IJ.setAutoThreshold(DIC, "Li dark no-reset");
+        IJ.run(DIC, "Mean...", "radius=3");
+        
+        //IJ.setAutoThreshold(DIC, "Default dark no-reset");
+        IJ.setAutoThreshold(DIC, "Li no-reset");
+        DIC.show();
+        //IJ.run("Make Binary", "method=Li background=Light calculate black");
         IJ.run(DIC, "Convert to Mask", "method=Li background=Light calculate black");
         
         //IJ.run(DIC, "Mean...", "radius=3 stack");
@@ -56,51 +65,74 @@ public class Spindle_Analysis_Plugin implements Command {
 
         // Processing for Fluorescence Channel
         ImagePlus Fluorescence = channels[Fluorescence_channel-1];
+        normalizeStack(Fluorescence);
         IJ.run(Fluorescence, "Subtract Background...", "rolling=50 stack");
+        
 
         // Analyse particles
         //IJ.run(DIC, "Analyze Particles...", "size=20-Infinity circularity=0.5-1.00 show=[Overlay Outlines] display exclude stack");
-
+        IJ.run("Analyze Particles...", "size=25-Infinity circularity=0.50-1.00 show=Overlay display exclude overlay add stack");
         // Get the results
-        ResultsTable rt = new ResultsTable();        
-        int options = ParticleAnalyzer.ADD_TO_MANAGER;
+        RoiManager roiManager = RoiManager.getRoiManager();
+        ResultsTable rt = ResultsTable.getResultsTable();/*
+        int options = ParticleAnalyzer.ADD_TO_MANAGER | ParticleAnalyzer.DOES_STACKS | ParticleAnalyzer.PARALLELIZE_STACKS |
+        		ParticleAnalyzer.SHOW_OUTLINES;
         int measurements = Measurements.ALL_STATS;
         RoiManager roiManager = new RoiManager(true);
+        ParticleAnalyzer analyzer = new ParticleAnalyzer(options, measurements, rt, 20, Double.POSITIVE_INFINITY, 0.5, 1.0);
         
+        analyzer.analyze(DIC);*/
+
         // Create an array to store condensation index
         double[] condensationIndex = new double[roiManager.getCount()];
 
-        for (int slice = 1; slice <= DIC.getNSlices(); slice++) {
-            DIC.setSlice(slice);
-            //ResultsTable rt = new ResultsTable();
-            ParticleAnalyzer analyzer = new ParticleAnalyzer(options, measurements, rt, 20, Double.POSITIVE_INFINITY, 0.5, 1.0);
-            analyzer.analyze(DIC);
-            for (int i = 0; i < roiManager.getCount(); i++) {
-                // Set the current slice
-                Fluorescence.setSlice(slice);
+        // Apply each ROI from the RoiManager to the Fluorescence image and measure the intensity
+        for (int i = 0; i < roiManager.getCount(); i++) {
+            // Set the ROI to the Fluorescence channel
+            Roi roi = roiManager.getRoi(i);
+            Fluorescence.setRoi(roi);
 
-                // Set the ROI to the Fluorescence channel
-                Roi roi = roiManager.getRoi(i);
-                Fluorescence.setRoi(roi);
-
-                // Calculate condensation index based on Skewness
-                ImageStatistics stats = Fluorescence.getStatistics(Measurements.SKEWNESS);
-                condensationIndex[slice - 1] = stats.skewness;
-            }
+            // Calculate condensation index based on skewness
+            ImageStatistics stats = Fluorescence.getStatistics(Measurements.SKEWNESS);
+            condensationIndex[i] = stats.skewness; 
         }
-            
-           
+
 
         // Create an array to represent frames
         double[] framesArray = new double[frames];
         for (int i = 0; i < frames; i++) {
             framesArray[i] = i;
         }
-
+        
+        smoothArray(condensationIndex, 2);
+        
         // Create a new plot
         Plot plot = new Plot("Condensation Index", "Frame", "Index");
         plot.add("line", framesArray, condensationIndex);
+        
         plot.show();
+        plot.setLimits(1, frames, plot.getLimits()[2], plot.getLimits()[3]);
+        plot.update();
 
     }
+    
+    private void normalizeStack(ImagePlus imp) {
+		ContrastEnhancer ce = new ContrastEnhancer();
+		ce.setNormalize(true);
+		ce.setProcessStack(true);
+		ce.setUseStackHistogram(true);
+		ce.stretchHistogram(imp, 0.35);
+	}
+    
+ // values:    an array of numbers that will be modified in place
+ // smoothing: the strength of the smoothing filter; 1=no change, larger values smoothes more
+    // Taken from : http://phrogz.net/js/framerate-independent-low-pass-filter.html
+ private void smoothArray(double[] values, double smoothing){
+   double value = values[0]; // start with the first input
+   for (int i=1, len=values.length; i<len; ++i){
+     double currentValue = values[i];
+     value += (currentValue - value) / smoothing;
+     values[i] = value;
+   }
+ }
 }
